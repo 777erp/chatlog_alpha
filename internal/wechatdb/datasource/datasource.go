@@ -35,6 +35,12 @@ type DataSource interface {
 	// 获取数据库列表
 	GetDBs() (map[string][]string, error)
 
+	// 获取指定数据库的表列表
+	GetTables(group, file string) ([]string, error)
+
+	// 获取指定表的数据
+	GetTableData(group, file, table string, limit, offset int) ([]map[string]interface{}, error)
+
 	Close() error
 }
 

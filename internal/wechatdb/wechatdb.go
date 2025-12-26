@@ -145,3 +145,11 @@ func (w *DB) SetCallback(group string, callback func(event fsnotify.Event) error
 func (w *DB) GetDBs() (map[string][]string, error) {
 	return w.ds.GetDBs()
 }
+
+func (w *DB) GetTables(group, file string) ([]string, error) {
+	return w.ds.GetTables(group, file)
+}
+
+func (w *DB) GetTableData(group, file, table string, limit, offset int) ([]map[string]interface{}, error) {
+	return w.ds.GetTableData(group, file, table, limit, offset)
+}

@@ -127,6 +127,20 @@ func (s *Service) GetDecryptedDBs() (map[string][]string, error) {
 	return s.db.GetDBs()
 }
 
+func (s *Service) GetTables(group, file string) ([]string, error) {
+	if s.db == nil {
+		return nil, nil
+	}
+	return s.db.GetTables(group, file)
+}
+
+func (s *Service) GetTableData(group, file, table string, limit, offset int) ([]map[string]interface{}, error) {
+	if s.db == nil {
+		return nil, nil
+	}
+	return s.db.GetTableData(group, file, table, limit, offset)
+}
+
 func (s *Service) initWebhook() error {
 	if s.webhook == nil {
 		return nil

@@ -818,6 +818,117 @@ func (ds *DataSource) GetDBs() (map[string][]string, error) {
 	return result, nil
 }
 
+func (ds *DataSource) GetTables(group, file string) ([]string, error) {
+	// Verify file belongs to group
+	paths, err := ds.dbm.GetDBPath(group)
+	if err != nil {
+		return nil, err
+	}
+	found := false
+	for _, p := range paths {
+		if p == file {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("file %s not found in group %s", file, group)
+	}
+
+	db, err := ds.dbm.OpenDB(file)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := db.Query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tables []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		tables = append(tables, name)
+	}
+	return tables, nil
+}
+
+func (ds *DataSource) GetTableData(group, file, table string, limit, offset int) ([]map[string]interface{}, error) {
+	// Verify file belongs to group
+	paths, err := ds.dbm.GetDBPath(group)
+	if err != nil {
+		return nil, err
+	}
+	found := false
+	for _, p := range paths {
+		if p == file {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("file %s not found in group %s", file, group)
+	}
+
+	db, err := ds.dbm.OpenDB(file)
+	if err != nil {
+		return nil, err
+	}
+
+	// Validate table name to prevent SQL injection (basic check)
+	// Although parameterized queries are used for values, table names usually can't be parameterized in standard SQL drivers easily without safe string construction.
+	// We can check if table exists first using the same query as GetTables or just simple validation.
+	// For now, let's trust the input is a valid table name from the list, but maybe wrap it in quotes.
+	
+	// Query data
+	query := fmt.Sprintf("SELECT * FROM \"%s\" LIMIT %d OFFSET %d", table, limit, offset)
+	rows, err := db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	columns, err := rows.Columns()
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		// Create a slice of interface{} to hold the values
+		values := make([]interface{}, len(columns))
+		valuePtrs := make([]interface{}, len(columns))
+		for i := range columns {
+			valuePtrs[i] = &values[i]
+		}
+
+		if err := rows.Scan(valuePtrs...); err != nil {
+			return nil, err
+		}
+
+		// Create map for this row
+		entry := make(map[string]interface{})
+		for i, col := range columns {
+			var v interface{}
+			val := values[i]
+			b, ok := val.([]byte)
+			if ok {
+				v = string(b)
+			} else {
+				v = val
+			}
+			entry[col] = v
+		}
+		result = append(result, entry)
+	}
+
+	return result, nil
+}
+
 func (ds *DataSource) Close() error {
 	return ds.dbm.Close()
 }

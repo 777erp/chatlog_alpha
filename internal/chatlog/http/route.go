@@ -62,6 +62,8 @@ func (s *Service) initAPIRouter() {
 		api.GET("/chatroom", s.handleChatRooms)
 		api.GET("/session", s.handleSessions)
 		api.GET("/db", s.handleGetDBs)
+		api.GET("/db/tables", s.handleGetDBTables)
+		api.GET("/db/data", s.handleGetDBTableData)
 		api.POST("/cache/clear", s.handleClearCache)
 	}
 }
@@ -708,5 +710,47 @@ func (s *Service) handleGetDBs(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, dbs)
+}
+
+func (s *Service) handleGetDBTables(c *gin.Context) {
+	group := c.Query("group")
+	file := c.Query("file")
+
+	if group == "" || file == "" {
+		errors.Err(c, errors.InvalidArg("group or file"))
+		return
+	}
+
+	tables, err := s.db.GetTables(group, file)
+	if err != nil {
+		errors.Err(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, tables)
+}
+
+func (s *Service) handleGetDBTableData(c *gin.Context) {
+	group := c.Query("group")
+	file := c.Query("file")
+	table := c.Query("table")
+	limitStr := c.DefaultQuery("limit", "20")
+	offsetStr := c.DefaultQuery("offset", "0")
+
+	if group == "" || file == "" || table == "" {
+		errors.Err(c, errors.InvalidArg("group, file or table"))
+		return
+	}
+
+	limit := 20
+	offset := 0
+	fmt.Sscanf(limitStr, "%d", &limit)
+	fmt.Sscanf(offsetStr, "%d", &offset)
+
+	data, err := s.db.GetTableData(group, file, table, limit, offset)
+	if err != nil {
+		errors.Err(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, data)
 }
 
