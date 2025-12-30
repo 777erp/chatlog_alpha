@@ -447,6 +447,7 @@
                     <label>输出格式</label>
                     <select id="chatlog-format">
                         <option value="json">JSON (预览)</option>
+                        <option value="chatlab">ChatLab JSON</option>
                         <option value="csv">CSV 导出</option>
                         <option value="xlsx">Excel 导出</option>
                         <option value="text">纯文本</option>
@@ -877,7 +878,7 @@
                     if (!res.ok) throw new Error(res.statusText);
                     
                     let text;
-                    if(format === 'json') {
+                    if(format === 'json' || format === 'chatlab') {
                         const json = await res.json();
                         text = JSON.stringify(json, null, 2);
                     } else {
@@ -887,7 +888,10 @@
                     resultArea.innerHTML = `
                         <div class="result-header">
                             <span class="url-display">${url}</span>
-                            <button class="btn btn-secondary text-sm" onclick="copyResult('${type}')">复制</button>
+                            <div style="display:flex; gap:10px;">
+                                <button class="btn btn-secondary text-sm" onclick="downloadResult('${type}', '${format}')">下载</button>
+                                <button class="btn btn-secondary text-sm" onclick="copyResult('${type}')">复制</button>
+                            </div>
                         </div>
                         <pre id="${type}-pre">${escapeHtml(text)}</pre>
                     `;
@@ -896,6 +900,31 @@
             } catch (e) {
                 resultArea.innerHTML = `<div style="color:var(--danger)">请求错误: ${e.message}</div>`;
             }
+        }
+
+        function downloadResult(type, format) {
+            const text = document.getElementById(`${type}-pre`).innerText;
+            let mimeType = 'text/plain';
+            let ext = 'txt';
+            
+            if (format === 'json' || format === 'chatlab') {
+                mimeType = 'application/json';
+                ext = 'json';
+            }
+
+            const blob = new Blob([text], { type: mimeType });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            
+            // Filename: type_timestamp.ext
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+            a.download = `${type}_export_${timestamp}.${ext}`;
+            
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
         }
 
         function escapeHtml(text) {

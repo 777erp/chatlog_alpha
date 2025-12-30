@@ -15,6 +15,7 @@ import (
 	"github.com/xuri/excelize/v2"
 
 	"github.com/sjzar/chatlog/internal/errors"
+	"github.com/sjzar/chatlog/internal/model"
 	"github.com/sjzar/chatlog/pkg/util"
 	"github.com/sjzar/chatlog/pkg/util/dat2img"
 	"github.com/sjzar/chatlog/pkg/util/silk"
@@ -131,6 +132,20 @@ func (s *Service) handleChatlog(c *gin.Context) {
 	}
 
 	switch strings.ToLower(q.Format) {
+	case "chatlab":
+		talkerName := q.Talker
+		if len(messages) > 0 {
+			// Try to find a non-empty TalkerName from messages
+			for _, m := range messages {
+				if m.TalkerName != "" {
+					talkerName = m.TalkerName
+					break
+				}
+			}
+		}
+		
+		chatLabData := model.ConvertToChatLab(messages, q.Talker, talkerName)
+		c.JSON(http.StatusOK, chatLabData)
 	case "csv":
 		c.Writer.Header().Set("Content-Type", "text/csv; charset=utf-8")
 		c.Writer.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s_%s_%s.csv", q.Talker, start.Format("2006-01-02"), end.Format("2006-01-02")))
