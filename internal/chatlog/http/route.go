@@ -4,6 +4,7 @@ import (
 	"embed"
 	"encoding/csv"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -130,6 +131,9 @@ func (s *Service) handleChatlog(c *gin.Context) {
 		errors.Err(c, err)
 		return
 	}
+
+	// Populate md5->path cache for media files
+	s.populateMD5PathCache(messages)
 
 	switch strings.ToLower(q.Format) {
 	case "chatlab":
@@ -464,6 +468,28 @@ func (s *Service) handleMedia(c *gin.Context, _type string) {
 		}
 		media, err := s.db.GetMedia(_type, k)
 		if err != nil {
+			// Fallback 1: try to find path from md5->path cache
+			if cachedPath := s.getMD5FromCache(k); cachedPath != "" {
+				// Try to find the actual file with different suffixes
+				if absolutePath := s.tryFindFileWithSuffixes(cachedPath); absolutePath != "" {
+					if _type == "image" {
+						s.handleImageFile(c, absolutePath)
+						return
+					}
+					c.Redirect(http.StatusFound, "/data/"+cachedPath)
+					return
+				}
+			}
+
+			// Fallback 2: try to find file by md5 in msg/attach directory
+			if _type == "image" && !strings.Contains(k, "/") {
+				if foundPath := s.findImageByMD5(k); foundPath != "" {
+					// Process the found image file
+					s.handleImageFile(c, foundPath)
+					return
+				}
+			}
+
 			_err = err
 			continue
 		}
@@ -476,59 +502,8 @@ func (s *Service) handleMedia(c *gin.Context, _type string) {
 			s.HandleVoice(c, media.Data)
 			return
 		case "image":
-			// If it's not a .dat file, redirect to the data handler as before.
-			if !strings.HasSuffix(strings.ToLower(media.Path), ".dat") {
-				c.Redirect(http.StatusFound, "/data/"+media.Path)
-				return
-			}
-
-			// It is a .dat file. Decrypt, save, and redirect to the new file.
-			absolutePath := filepath.Join(s.conf.GetDataDir(), media.Path)
-
-			// Build the potential output path to check if it exists
-			var newRelativePath string
-			outputPath := strings.TrimSuffix(absolutePath, filepath.Ext(absolutePath))
-			relativePathBase := strings.TrimSuffix(media.Path, filepath.Ext(media.Path))
-
-			// Check if a converted file already exists
-			for _, ext := range []string{".jpg", ".png", ".gif", ".jpeg", ".bmp", ".mp4"} {
-				if _, err := os.Stat(outputPath + ext); err == nil {
-					newRelativePath = relativePathBase + ext
-					break
-				}
-			}
-
-			// If a converted file is found, redirect to it immediately
-			if newRelativePath != "" {
-				c.Redirect(http.StatusFound, "/data/"+newRelativePath)
-				return
-			}
-
-			// If not found, decrypt and save it
-			b, err := os.ReadFile(absolutePath)
-			if err != nil {
-				errors.Err(c, err)
-				return
-			}
-
-			out, ext, err := dat2img.Dat2Image(b)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{
-					"error":  "Failed to parse .dat file",
-					"reason": err.Error(),
-					"path":   absolutePath,
-				})
-				return
-			}
-
-			// Save the decrypted file. s.saveDecryptedFile handles the existence check.
-			s.saveDecryptedFile(absolutePath, out, ext)
-
-			// Build the new relative path and redirect
-			newRelativePath = relativePathBase + "." + ext
-			c.Redirect(http.StatusFound, "/data/"+newRelativePath)
+			s.handleImageFile(c, filepath.Join(s.conf.GetDataDir(), media.Path))
 			return
-
 		default:
 			// For other types, keep the old redirect logic
 			c.Redirect(http.StatusFound, "/data/"+media.Path)
@@ -562,6 +537,195 @@ func (s *Service) findPath(_type string, key string) (string, error) {
 		}
 	}
 	return "", errors.ErrMediaNotFound
+}
+
+// findImageByMD5 searches for an image file by MD5 in the msg/attach directory
+// It tries different suffixes: _h.dat, .dat, _t.dat
+func (s *Service) findImageByMD5(md5 string) string {
+	dataDir := s.conf.GetDataDir()
+	attachDir := filepath.Join(dataDir, "msg", "attach")
+
+	// Check if attach directory exists
+	if _, err := os.Stat(attachDir); os.IsNotExist(err) {
+		return ""
+	}
+
+	var foundPath string
+
+	// Walk through the attach directory to find files matching the md5
+	err := filepath.Walk(attachDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			// Skip directories we can't access
+			if os.IsPermission(err) {
+				return filepath.SkipDir
+			}
+			return err
+		}
+
+		// Stop if we already found a file
+		if foundPath != "" {
+			return io.EOF
+		}
+
+		// Skip directories
+		if info.IsDir() {
+			return nil
+		}
+
+		// Check if file name contains the md5
+		baseName := strings.ToLower(filepath.Base(path))
+		if !strings.Contains(baseName, strings.ToLower(md5)) {
+			return nil
+		}
+
+		// Check if it's a .dat file
+		if !strings.HasSuffix(baseName, ".dat") {
+			return nil
+		}
+
+		// Try to read and verify the file
+		if _, err := os.Stat(path); err == nil {
+			foundPath = path
+			return io.EOF
+		}
+
+		return nil
+	})
+
+	// If we found io.EOF, it means we found the file
+	if err == io.EOF && foundPath != "" {
+		return foundPath
+	}
+
+	return ""
+}
+
+// getMD5FromCache retrieves path from md5->path cache
+func (s *Service) getMD5FromCache(md5 string) string {
+	s.md5PathMu.RLock()
+	defer s.md5PathMu.RUnlock()
+
+	if path, ok := s.md5PathCache[md5]; ok {
+		log.Debug().Str("md5", md5).Str("path", path).Msg("Cache hit for md5")
+		return path
+	}
+
+	log.Debug().Str("md5", md5).Msg("Cache miss for md5")
+	return ""
+}
+
+// tryFindFileWithSuffixes tries to find a file with different suffixes
+// Priority: .dat (original) -> _h.dat (HD) -> _t.dat (thumbnail)
+func (s *Service) tryFindFileWithSuffixes(basePath string) string {
+	dataDir := s.conf.GetDataDir()
+
+	// Try different suffixes with priority: original -> HD -> thumbnail
+	suffixes := []string{".dat", "_h.dat", "_t.dat"}
+
+	for _, suffix := range suffixes {
+		testPath := filepath.Join(dataDir, basePath+suffix)
+		if _, err := os.Stat(testPath); err == nil {
+			log.Debug().Str("path", testPath).Str("suffix", suffix).Msg("Found file with suffix")
+			return testPath
+		}
+	}
+
+	// Try without any suffix (might already have extension)
+	testPath := filepath.Join(dataDir, basePath)
+	if _, err := os.Stat(testPath); err == nil {
+		log.Debug().Str("path", testPath).Msg("Found file without suffix")
+		return testPath
+	}
+
+	log.Debug().Str("basePath", basePath).Msg("File not found with any suffix")
+	return ""
+}
+
+// populateMD5PathCache populates the md5->path cache from messages
+func (s *Service) populateMD5PathCache(messages []*model.Message) {
+	s.md5PathMu.Lock()
+	defer s.md5PathMu.Unlock()
+
+	for _, msg := range messages {
+		if msg.Contents == nil {
+			continue
+		}
+
+		// Only cache for image, video, and file types
+		if msg.Type != model.MessageTypeImage &&
+			msg.Type != model.MessageTypeVideo &&
+			msg.Type != model.MessageTypeVoice {
+			continue
+		}
+
+		// Get md5 from contents
+		md5Value, md5Ok := msg.Contents["md5"].(string)
+		if !md5Ok || md5Value == "" {
+			continue
+		}
+
+		// Get path from contents
+		pathValue, pathOk := msg.Contents["path"].(string)
+		if pathOk && pathValue != "" {
+			s.md5PathCache[md5Value] = pathValue
+			log.Debug().Str("md5", md5Value).Str("path", pathValue).Msg("Cached md5->path mapping")
+		}
+	}
+}
+
+// handleImageFile processes an image file, handling decryption if it's a .dat file
+func (s *Service) handleImageFile(c *gin.Context, absolutePath string) {
+	// If it's not a .dat file, redirect to the data handler
+	if !strings.HasSuffix(strings.ToLower(absolutePath), ".dat") {
+		relativePath := strings.TrimPrefix(absolutePath, s.conf.GetDataDir())
+		relativePath = strings.TrimPrefix(relativePath, string(filepath.Separator))
+		c.Redirect(http.StatusFound, "/data/"+relativePath)
+		return
+	}
+
+	// Check if already converted
+	outputPath := strings.TrimSuffix(absolutePath, filepath.Ext(absolutePath))
+	var newRelativePath string
+	relativePathBase := strings.TrimPrefix(outputPath, s.conf.GetDataDir())
+	relativePathBase = strings.TrimPrefix(relativePathBase, string(filepath.Separator))
+
+	// Check if a converted file already exists
+	for _, ext := range []string{".jpg", ".png", ".gif", ".jpeg", ".bmp"} {
+		if _, err := os.Stat(outputPath + ext); err == nil {
+			newRelativePath = relativePathBase + ext
+			break
+		}
+	}
+
+	// If a converted file is found, redirect to it immediately
+	if newRelativePath != "" {
+		c.Redirect(http.StatusFound, "/data/"+newRelativePath)
+		return
+	}
+
+	// Decrypt and convert the .dat file
+	b, err := os.ReadFile(absolutePath)
+	if err != nil {
+		errors.Err(c, err)
+		return
+	}
+
+	out, ext, err := dat2img.Dat2Image(b)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":  "Failed to parse .dat file",
+			"reason": err.Error(),
+			"path":   absolutePath,
+		})
+		return
+	}
+
+	// Save the decrypted file
+	s.saveDecryptedFile(absolutePath, out, ext)
+
+	// Build the new relative path and redirect
+	newRelativePath = relativePathBase + "." + ext
+	c.Redirect(http.StatusFound, "/data/"+newRelativePath)
 }
 
 func (s *Service) handleMediaData(c *gin.Context) {

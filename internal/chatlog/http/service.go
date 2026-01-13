@@ -40,6 +40,10 @@ type Service struct {
 	mcpSubscriptions map[string]*Subscription
 	mcpSubMu         sync.RWMutex
 
+	// md5 到 path 的缓存（用于图片、视频等媒体文件）
+	md5PathCache map[string]string
+	md5PathMu    sync.RWMutex
+
 	lastPushTime   time.Time
 	lastPushTalker string
 
@@ -74,6 +78,7 @@ func NewService(conf Config, db *database.Service) *Service {
 		db:               db,
 		router:           router,
 		mcpSubscriptions: make(map[string]*Subscription),
+		md5PathCache:     make(map[string]string),
 		subscriptionPath: filepath.Join(conf.GetDataDir(), "subscriptions.json"),
 	}
 
