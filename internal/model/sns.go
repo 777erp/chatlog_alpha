@@ -3,6 +3,7 @@ package model
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"regexp"
 	"strconv"
 	"strings"
@@ -212,7 +213,7 @@ func parseSNSImageMedia(xml string) []SNSMedia {
 			if urlTag == "" {
 				urlTag = extractXMLTag(mediaXML, "thumb")
 			}
-			media.URL = urlTag
+			media.URL = html.UnescapeString(urlTag)
 
 			// 提取尺寸
 			width := extractXMLTagAttr(mediaXML, "size", "width")
@@ -245,8 +246,8 @@ func parseSNSVideoMedia(xml string) []SNSMedia {
 			mediaXML := match[1]
 
 			// 提取 URL
-			media.URL = extractXMLTag(mediaXML, "url")
-			media.ThumbURL = extractXMLTag(mediaXML, "thumb")
+			media.URL = html.UnescapeString(extractXMLTag(mediaXML, "url"))
+			media.ThumbURL = html.UnescapeString(extractXMLTag(mediaXML, "thumb"))
 
 			// 提取尺寸
 			width := extractXMLTagAttr(mediaXML, "size", "width")
@@ -279,16 +280,16 @@ func parseSNSArticle(xml string) *SNSArticle {
 
 	article.Title = extractXMLTag(xml, "title")
 	article.Description = extractXMLTag(xml, "description")
-	article.URL = extractXMLTag(xml, "contentUrl")
+	article.URL = html.UnescapeString(extractXMLTag(xml, "contentUrl"))
 
 	// 提取封面图
 	re := regexp.MustCompile(`<media>(.*?)</media>`)
 	matches := re.FindStringSubmatch(xml)
 	if len(matches) > 1 {
 		mediaXML := matches[1]
-		article.CoverURL = extractXMLTag(mediaXML, "thumb")
+		article.CoverURL = html.UnescapeString(extractXMLTag(mediaXML, "thumb"))
 		if article.CoverURL == "" {
-			article.CoverURL = extractXMLTag(mediaXML, "url")
+			article.CoverURL = html.UnescapeString(extractXMLTag(mediaXML, "url"))
 		}
 	}
 
@@ -313,7 +314,7 @@ func parseSNSFinderFeed(xml string) *SNSFinderFeed {
 	feedXML := matches[1]
 
 	feed.Nickname = extractXMLTag(feedXML, "nickname")
-	feed.Avatar = extractXMLTag(feedXML, "avatar")
+	feed.Avatar = html.UnescapeString(extractXMLTag(feedXML, "avatar"))
 	feed.Desc = extractXMLTag(feedXML, "desc")
 
 	// 提取媒体数量
@@ -327,9 +328,9 @@ func parseSNSFinderFeed(xml string) *SNSFinderFeed {
 	mediaMatches := mediaRe.FindStringSubmatch(feedXML)
 	if len(mediaMatches) > 1 {
 		mediaXML := mediaMatches[1]
-		feed.VideoURL = extractXMLTag(mediaXML, "url")
-		feed.ThumbURL = extractXMLTag(mediaXML, "thumbUrl")
-		feed.CoverURL = extractXMLTag(mediaXML, "coverUrl")
+		feed.VideoURL = html.UnescapeString(extractXMLTag(mediaXML, "url"))
+		feed.ThumbURL = html.UnescapeString(extractXMLTag(mediaXML, "thumbUrl"))
+		feed.CoverURL = html.UnescapeString(extractXMLTag(mediaXML, "coverUrl"))
 
 		// 提取尺寸
 		width := extractXMLTagAttr(mediaXML, "size", "width")
