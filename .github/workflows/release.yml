@@ -1,6 +1,24 @@
 name: Release
 
+# 触发条件 - 修复语法错误
 on:
+  # 1. 手动触发配置（添加输入参数，这样更有用）
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: '选择构建类型'
+        required: true
+        default: 'snapshot'
+        type: choice
+        options:
+          - snapshot
+          - release
+      version:
+        description: '版本号（仅release类型需要）'
+        required: false
+        default: 'v1.0.0'
+  
+  # 2. 自动触发：推送到标签或main分支
   push:
     tags:
       - 'v*'
@@ -38,23 +56,39 @@ jobs:
         with:
           install-only: true
 
-      - name: Run GoReleaser (Release)
-        if: startsWith(github.ref, 'refs/tags/')
+      # 处理手动触发的情况
+      - name: Set up for manual release
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_type == 'release'
+        run: |
+          # 如果手动触发选择release，创建标签
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+          git tag ${{ github.event.inputs.version }}
+          git push origin ${{ github.event.inputs.version }}
+
+      - name: Run GoReleaser (Tag Release)
+        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && github.event.inputs.build_type == 'release')
         run: goreleaser release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Run GoReleaser (Main Branch Build)
-        if: github.ref == 'refs/heads/main'
+      - name: Run GoReleaser (Snapshot Build)
+        if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && github.event.inputs.build_type == 'snapshot')
         run: goreleaser release --snapshot --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Update Latest Release
-        if: github.ref == 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/')
+      - name: Update Latest Release (for main branch)
+        if: (github.ref == 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.build_type == 'snapshot')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
           name: "Latest Development Build"
-          body: "这是来自 main 分支的最新自动构建版本。仅供开发测试使用。"
+          body: |
+            这是来自 ${{ github.ref_name }} 分支的最新自动构建版本。
+            构建时间: ${{ github.event.head_commit.timestamp }}
+            提交: ${{ github.sha }}
+            仅供开发测试使用。
           prerelease: true
           make_latest: false
           files: |
@@ -68,4 +102,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: chatlog-snapshot
-          path: dist/chatlog_windows_amd64_v1/chatlog.exe
+          path: dist/
+          retention-days: 7
